@@ -1,14 +1,29 @@
 name: "Ubuntu Package"
 
-# Builds the Linux .deb and AppImage (CPU-only) so they can be downloaded
-# without installing any build tools locally.
-#   - Run it by hand: Actions > Ubuntu Package > Run workflow. The files are
-#     attached to the run as the "meetily-ubuntu" artifact.
+# Builds the Linux packages so they can be downloaded without installing any
+# build tools locally. Two variants:
+#   - cpu:  .deb and AppImage, CPU-only transcription. Artifact "meetily-ubuntu".
+#   - cuda: .deb with NVIDIA CUDA transcription (Whisper) and local summaries
+#           (llama-helper). The CUDA runtime libraries are bundled in
+#           /usr/lib/meetily/cuda, so the machine only needs the NVIDIA driver.
+#           Artifact "meetily-ubuntu-cuda".
+#
+#   - Run it by hand: Actions > Ubuntu Package > Run workflow.
 #   - Push a tag like v0.5.0-ubuntu.1 to also publish them as a GitHub Release.
 #   - Pull requests to main run it as a build check.
 
 on:
   workflow_dispatch:
+    inputs:
+      variant:
+        description: "Which package to build"
+        type: choice
+        options: [all, cpu, cuda]
+        default: all
+      cuda_architectures:
+        description: "CUDA GPU architectures (CMake list). Default covers GeForce 16/20 (Turing) through 50 (Blackwell)."
+        type: string
+        default: "75-real;80-real;86-real;89-real;120-real;120-virtual"
   push:
     tags:
       - "v*"
@@ -19,14 +34,30 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CUDA_VERSION: "12.8"
+  CUDA_ARCHS_DEFAULT: "75-real;80-real;86-real;89-real;120-real;120-virtual"
+
 jobs:
   build:
-    name: Build .deb and AppImage
+    name: Build ${{ matrix.variant }} package
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both variants unless a manual run picked one.
+        variant: ${{ fromJSON((inputs.variant == 'cpu' && '["cpu"]') || (inputs.variant == 'cuda' && '["cuda"]') || '["cpu","cuda"]') }}
     # 22.04 builds against an older glibc, so the packages also run on 24.04.
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    # Compiling the CUDA kernels for several GPU generations takes a while.
+    timeout-minutes: ${{ matrix.variant == 'cuda' && 300 || 90 }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space (CUDA)
+        if: matrix.variant == 'cuda'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Install system packages
         run: |
@@ -36,6 +67,30 @@ jobs:
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev \
             libasound2-dev libpulse-dev libopenblas-dev libxtst-dev libxrandr-dev \
             libclang-dev fuse libfuse2
+
+      # Only the compiler and the libraries Whisper and llama.cpp link against,
+      # not the full toolkit.
+      - name: Install CUDA ${{ env.CUDA_VERSION }} build packages
+        if: matrix.variant == 'cuda'
+        run: |
+          V="${CUDA_VERSION/./-}"
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-nvcc-$V cuda-cudart-dev-$V cuda-driver-dev-$V cuda-cuobjdump-$V \
+            libcublas-dev-$V
+          # libculibos.a moved to its own package in some CUDA releases.
+          sudo apt-get install -y --no-install-recommends cuda-culibos-dev-$V || true
+          CUDA_HOME="/usr/local/cuda-${CUDA_VERSION}"
+          test -f "$CUDA_HOME/lib64/libculibos.a" || { echo "libculibos.a missing"; ls "$CUDA_HOME/lib64"; exit 1; }
+          # whisper-rs-sys looks for the libraries under /usr/local/cuda.
+          [ -e /usr/local/cuda ] || sudo ln -s "$CUDA_HOME" /usr/local/cuda
+          echo "CUDA_PATH=$CUDA_HOME" >> "$GITHUB_ENV"
+          echo "CUDA_HOME=$CUDA_HOME" >> "$GITHUB_ENV"
+          echo "$CUDA_HOME/bin" >> "$GITHUB_PATH"
+          "$CUDA_HOME/bin/nvcc" --version
+          df -h /
 
       - uses: pnpm/action-setup@v4
         with:
@@ -55,33 +110,95 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ubuntu-package-22.04
+          key: ubuntu-package-22.04-${{ matrix.variant }}
 
       - name: Install frontend dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
+      # whisper-rs-sys does not pass CMAKE_* variables to CMake, so the GPU
+      # architecture list reaches whisper.cpp through a toolchain file.
+      # llama-cpp-sys-2 forwards CMAKE_CUDA_ARCHITECTURES itself.
+      # The CUDA runtime libraries go into the .deb, and the binary gets an
+      # RPATH to them so nothing beyond the NVIDIA driver is needed.
+      - name: Configure CUDA build
+        if: matrix.variant == 'cuda'
+        env:
+          ARCHS_INPUT: ${{ inputs.cuda_architectures }}
+        run: |
+          ARCHS="${ARCHS_INPUT:-$CUDA_ARCHS_DEFAULT}"
+          echo "CUDA architectures: $ARCHS"
+          printf 'set(CMAKE_CUDA_ARCHITECTURES "%s" CACHE STRING "" FORCE)\n' "$ARCHS" > "$RUNNER_TEMP/cuda-archs.cmake"
+          LIBDIR="$CUDA_HOME/targets/x86_64-linux/lib"
+          python3 - "$LIBDIR" "$RUNNER_TEMP/tauri-cuda.json" <<'EOF'
+          import json, os, sys
+          libdir, out = sys.argv[1], sys.argv[2]
+          libs = ["libcudart.so.12", "libcublas.so.12", "libcublasLt.so.12"]
+          files = {f"/usr/lib/meetily/cuda/{n}": os.path.realpath(os.path.join(libdir, n)) for n in libs}
+          for src in files.values():
+              assert os.path.isfile(src), src
+          json.dump({"bundle": {"targets": ["deb"], "linux": {"deb": {"files": files}}}}, open(out, "w"), indent=2)
+          print(open(out).read())
+          EOF
+          {
+            echo "TAURI_GPU_FEATURE=cuda"
+            echo "CMAKE_CUDA_ARCHITECTURES=$ARCHS"
+            echo "CMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/cuda-archs.cmake"
+            echo "MEETILY_TAURI_CONFIG=$RUNNER_TEMP/tauri-cuda.json"
+            echo "RUSTFLAGS=-C link-arg=-Wl,--disable-new-dtags,-rpath,/usr/lib/meetily/cuda"
+            echo "CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)"
+          } >> "$GITHUB_ENV"
+
       # build-gpu.sh builds and stages the llama-helper sidecar, then runs the
-      # Tauri build. With no GPU SDK on the runner it builds CPU-only. Without
-      # TAURI_SIGNING_PRIVATE_KEY it skips the signed updater artifacts.
+      # Tauri build. For cpu there is no GPU SDK on the runner, so it builds
+      # CPU-only. Without TAURI_SIGNING_PRIVATE_KEY it skips the signed updater
+      # artifacts.
       - name: Build
         working-directory: frontend
         run: ./build-gpu.sh
 
+      - name: Check CUDA binaries
+        if: matrix.variant == 'cuda'
+        run: |
+          set -e
+          DEB=$(ls target/release/bundle/deb/*.deb)
+          mkdir -p "$RUNNER_TEMP/deb" && dpkg-deb -x "$DEB" "$RUNNER_TEMP/deb"
+          ROOT="$RUNNER_TEMP/deb"
+          ls -la "$ROOT/usr/lib/meetily/cuda" "$ROOT/usr/bin"
+          BIN="$ROOT/usr/bin/meetily"
+          echo "--- meetily dynamic section"
+          readelf -d "$BIN" | grep -E 'NEEDED|RPATH|RUNPATH'
+          readelf -d "$BIN" | grep -q 'RPATH.*/usr/lib/meetily/cuda' || { echo "RPATH missing"; exit 1; }
+          # Every CUDA library the app needs, except the driver's libcuda, must be bundled.
+          for lib in $(readelf -d "$BIN" | sed -n 's/.*NEEDED.*\[\(libcu[^]]*\)\].*/\1/p'); do
+            [ "$lib" = "libcuda.so.1" ] && continue
+            test -f "$ROOT/usr/lib/meetily/cuda/$lib" || { echo "$lib is not bundled"; exit 1; }
+          done
+          echo "--- GPU code in meetily (Whisper)"
+          cuobjdump --list-elf "$BIN" | sed -E 's/.*\.(sm_[0-9a-z]+)\..*/\1/' | sort | uniq -c || true
+          echo "--- GPU code in llama-helper (summaries)"
+          cuobjdump --list-elf "$ROOT/usr/bin/llama-helper" | sed -E 's/.*\.(sm_[0-9a-z]+)\..*/\1/' | sort | uniq -c || true
+
       - name: Collect packages
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
           mkdir -p dist
-          cp target/release/bundle/deb/*.deb dist/
-          cp target/release/bundle/appimage/*.AppImage dist/
-          (cd dist && sha256sum * > SHA256SUMS.txt)
+          for f in target/release/bundle/deb/*.deb; do
+            if [ "$VARIANT" = cuda ]; then cp "$f" "dist/$(basename "$f" .deb)_cuda.deb"; else cp "$f" dist/; fi
+          done
+          if [ "$VARIANT" = cpu ]; then cp target/release/bundle/appimage/*.AppImage dist/; fi
+          (cd dist && sha256sum * > "SHA256SUMS-$VARIANT.txt")
           ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: meetily-ubuntu
+          name: ${{ matrix.variant == 'cuda' && 'meetily-ubuntu-cuda' || 'meetily-ubuntu' }}
           path: dist/*
           if-no-files-found: error
           retention-days: 30
+          # .deb and AppImage are already compressed.
+          compression-level: 0
 
   release:
     name: Publish GitHub Release
@@ -93,7 +210,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: meetily-ubuntu
+          pattern: meetily-ubuntu*
+          merge-multiple: true
           path: dist
 
       - uses: softprops/action-gh-release@v2
