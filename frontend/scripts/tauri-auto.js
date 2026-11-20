@@ -49,6 +49,16 @@ if (platform === 'linux' && feature === 'cuda') {
 
 // Build the tauri command
 let tauriCmd = `tauri ${command}`;
+
+// tauri.conf.json sets createUpdaterArtifacts, which makes `tauri build` fail after
+// bundling when no updater signing key is available (local builds, forks).
+// Without a key, skip the updater artifacts so the build finishes cleanly.
+if (command === 'build' && !process.env.TAURI_SIGNING_PRIVATE_KEY) {
+  const overridePath = path.join(os.tmpdir(), 'meetily-no-updater-artifacts.json');
+  fs.writeFileSync(overridePath, JSON.stringify({ bundle: { createUpdaterArtifacts: false } }));
+  tauriCmd += ` --config "${overridePath}"`;
+  console.log('ℹ️  TAURI_SIGNING_PRIVATE_KEY not set: building without signed updater artifacts');
+}
 if (feature && feature !== 'none') {
   tauriCmd += ` -- --features ${feature}`;
   console.log(`🚀 Running: tauri ${command} with features: ${feature}`);
