@@ -9,7 +9,7 @@ This guide helps you build Meetily on Linux with **automatic GPU acceleration**.
 The **Ubuntu Package** GitHub Actions workflow (`.github/workflows/ubuntu-package.yml`) builds a CPU-only `.deb` and AppImage on Ubuntu 22.04. Run it from **Actions → Ubuntu Package → Run workflow**, then download the `meetily-ubuntu` artifact from the finished run. Pushing a `v*` tag also publishes the files as a GitHub Release.
 
 - **.deb:** `sudo apt install ./meetily_<version>_amd64.deb`
-- **AppImage:** needs FUSE 2. On Ubuntu 24.04 install `libfuse2t64` (22.04: `libfuse2`), otherwise it fails with "Cannot mount AppImage, please check your FUSE setup". Then `chmod +x meetily_<version>_amd64.AppImage` and run it. Without FUSE you can run it with `--appimage-extract-and-run`.
+- **AppImage:** uses the static type-2 runtime with a zstd-compressed image, so it needs `fusermount3` (package `fuse3`, installed by default on Ubuntu desktops) but not `libfuse2`. If it fails with "Cannot mount AppImage, please check your FUSE setup", install `fuse3` or run it with `--appimage-extract-and-run`. AppImageLauncher (the "Integrate" prompt) cannot read zstd images and fails with "This doesn't look like a squashfs image"; remove it or use the .deb.
 
 ---
 
