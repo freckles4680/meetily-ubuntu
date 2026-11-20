@@ -1,0 +1,102 @@
+name: "Ubuntu Package"
+
+# Builds the Linux .deb and AppImage (CPU-only) so they can be downloaded
+# without installing any build tools locally.
+#   - Run it by hand: Actions > Ubuntu Package > Run workflow. The files are
+#     attached to the run as the "meetily-ubuntu" artifact.
+#   - Push a tag like v0.5.0-ubuntu.1 to also publish them as a GitHub Release.
+#   - Pull requests to main run it as a build check.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build .deb and AppImage
+    # 22.04 builds against an older glibc, so the packages also run on 24.04.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config file xdg-utils patchelf \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev \
+            libasound2-dev libpulse-dev libopenblas-dev libxtst-dev libxrandr-dev \
+            libclang-dev fuse libfuse2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # Pinned: Rust 1.100's cargo moved build-script OUT_DIR one level deeper;
+      # tauri-build 2.6.1 and ort-sys 2.0.0-rc.10 assume the old depth.
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: ubuntu-package-22.04
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      # build-gpu.sh builds and stages the llama-helper sidecar, then runs the
+      # Tauri build. With no GPU SDK on the runner it builds CPU-only. Without
+      # TAURI_SIGNING_PRIVATE_KEY it skips the signed updater artifacts.
+      - name: Build
+        working-directory: frontend
+        run: ./build-gpu.sh
+
+      - name: Collect packages
+        run: |
+          mkdir -p dist
+          cp target/release/bundle/deb/*.deb dist/
+          cp target/release/bundle/appimage/*.AppImage dist/
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meetily-ubuntu
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: meetily-ubuntu
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

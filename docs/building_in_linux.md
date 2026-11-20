@@ -4,6 +4,12 @@ This guide helps you build Meetily on Linux with **automatic GPU acceleration**.
 
 ---
 
+## 📦 Download a build instead (no local tools)
+
+The **Ubuntu Package** GitHub Actions workflow (`.github/workflows/ubuntu-package.yml`) builds a CPU-only `.deb` and AppImage on Ubuntu 22.04. Run it from **Actions → Ubuntu Package → Run workflow**, then download the `meetily-ubuntu` artifact from the finished run. Pushing a `v*` tag also publishes the files as a GitHub Release.
+
+---
+
 ## 🚀 Quick Start (Recommended for Beginners)
 
 If you're new to building on Linux, start here. These simple commands work for most users:
