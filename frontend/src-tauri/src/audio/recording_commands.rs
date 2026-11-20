@@ -1047,6 +1047,9 @@ async fn stop_recording_for_session<R: Runtime>(
     };
 
     match config.as_deref() {
+        Some(crate::audio::transcription::OPENAI_COMPATIBLE_PROVIDER_ID) => {
+            info!("🌐 OpenAI-compatible transcription: no local model to unload");
+        }
         Some("parakeet") => {
             info!("🦜 Unloading Parakeet model...");
             let engine_clone = {

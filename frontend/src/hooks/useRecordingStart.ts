@@ -10,7 +10,10 @@ import { showRecordingNotification } from '@/lib/recordingNotification';
 import {
   getProviderCommands,
   hasDownloadingModel,
+  isApiTranscriptionProvider,
+  isTranscriptApiConfigReady,
   type ModelWithStatus,
+  type TranscriptApiConfig,
 } from '@/lib/transcription-model-readiness';
 import { toast } from 'sonner';
 
@@ -82,6 +85,11 @@ export function useRecordingStart(
   const checkTranscriptionModelReady = useCallback(async (): Promise<boolean> => {
     try {
       const provider = await getTranscriptionProvider();
+      if (isApiTranscriptionProvider(provider)) {
+        const apiConfig = await invoke<TranscriptApiConfig | null>('api_get_transcript_custom_openai_config');
+        return isTranscriptApiConfigReady(apiConfig);
+      }
+
       const commands = getProviderCommands(provider);
 
       if (commands) {
@@ -137,7 +145,7 @@ export function useRecordingStart(
           Analytics.trackButtonClick('start_recording_blocked_downloading', 'home_page');
         } else {
           toast.error('Transcription model not ready', {
-            description: 'Please download a transcription model before recording.',
+            description: 'Please download a transcription model, or save your transcription API settings, before recording.',
             duration: 5000,
           });
           showModal?.('modelSelector', 'Transcription model setup required');
@@ -229,7 +237,7 @@ export function useRecordingStart(
               Analytics.trackButtonClick('start_recording_blocked_downloading', 'sidebar_auto');
             } else {
               toast.error('Transcription model not ready', {
-                description: 'Please download a transcription model before recording.',
+                description: 'Please download a transcription model, or save your transcription API settings, before recording.',
                 duration: 5000,
               });
               showModal?.('modelSelector', 'Transcription model setup required');
@@ -328,7 +336,7 @@ export function useRecordingStart(
           Analytics.trackButtonClick('start_recording_blocked_downloading', 'sidebar_direct');
         } else {
           toast.error('Transcription model not ready', {
-            description: 'Please download a transcription model before recording.',
+            description: 'Please download a transcription model, or save your transcription API settings, before recording.',
             duration: 5000,
           });
           showModal?.('modelSelector', 'Transcription model setup required');

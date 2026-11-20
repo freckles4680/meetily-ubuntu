@@ -1407,6 +1407,84 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
     }
 }
 
+// ===== TRANSCRIPTION: OPENAI-COMPATIBLE API COMMANDS =====
+
+/// Saves the OpenAI-compatible transcription config and makes it the active transcript provider
+#[tauri::command]
+pub async fn api_save_transcript_custom_openai_config<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+) -> Result<serde_json::Value, String> {
+    use crate::audio::transcription::TranscriptCustomOpenAIConfig;
+
+    let config = TranscriptCustomOpenAIConfig::validated(&endpoint, api_key, &model)?;
+    log_info!(
+        "Transcript OpenAI-compatible config save requested; endpoint_origin={}, model={}",
+        url_origin_for_log(&config.endpoint),
+        config.model
+    );
+
+    SettingsRepository::save_transcript_custom_openai_config(state.db_manager.pool(), &config)
+        .await
+        .map_err(|e| {
+            log_error!("Failed to save transcript OpenAI-compatible config: {}", e);
+            format!("Failed to save transcription API settings: {}", e)
+        })?;
+
+    Ok(serde_json::json!({
+        "status": "success",
+        "message": "Transcription API settings saved"
+    }))
+}
+
+/// Gets the OpenAI-compatible transcription config, if one was saved
+#[tauri::command]
+pub async fn api_get_transcript_custom_openai_config<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<crate::audio::transcription::TranscriptCustomOpenAIConfig>, String> {
+    SettingsRepository::get_transcript_custom_openai_config(state.db_manager.pool())
+        .await
+        .map_err(|e| {
+            log_error!("Failed to get transcript OpenAI-compatible config: {}", e);
+            format!("Failed to load transcription API settings: {}", e)
+        })
+}
+
+/// Tests an OpenAI-compatible transcription endpoint by sending one second of silence
+#[tauri::command]
+pub async fn api_test_transcript_custom_openai_connection<R: Runtime>(
+    _app: AppHandle<R>,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+) -> Result<serde_json::Value, String> {
+    use crate::audio::transcription::openai_compatible_provider::{
+        build_http_client, request_transcription,
+    };
+    use crate::audio::transcription::TranscriptCustomOpenAIConfig;
+
+    let config = TranscriptCustomOpenAIConfig::validated(&endpoint, api_key, &model)?;
+    log_info!(
+        "Transcript OpenAI-compatible connection test; endpoint_origin={}, model={}",
+        url_origin_for_log(&config.endpoint),
+        config.model
+    );
+
+    let client = build_http_client()?;
+    let silence = vec![0.0f32; 16_000];
+    match request_transcription(&client, &config, &silence, None).await {
+        Ok(_) => Ok(serde_json::json!({
+            "status": "success",
+            "message": "Connection successful: the server accepted a test audio clip"
+        })),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod external_url_tests {
     use super::parse_external_url;
