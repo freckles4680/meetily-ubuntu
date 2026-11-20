@@ -177,6 +177,14 @@ pub async fn whisper_load_model(
     }
 }
 
+/// Which hardware local Whisper transcription runs on (GPU or CPU), for the settings UI.
+#[command]
+pub async fn whisper_get_acceleration() -> Result<crate::whisper_engine::WhisperRuntimeAcceleration, String> {
+    tauri::async_runtime::spawn_blocking(crate::whisper_engine::whisper_runtime_acceleration)
+        .await
+        .map_err(|e| format!("Failed to detect Whisper acceleration: {}", e))
+}
+
 #[command]
 pub async fn whisper_get_current_model() -> Result<Option<String>, String> {
     let engine = {

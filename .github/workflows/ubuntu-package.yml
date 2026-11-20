@@ -133,11 +133,14 @@ jobs:
           python3 - "$LIBDIR" "$RUNNER_TEMP/tauri-cuda.json" <<'EOF'
           import json, os, sys
           libdir, out = sys.argv[1], sys.argv[2]
+          # "+cuda" marks the package as the GPU build in dpkg/apt (0.5.0+cuda sorts
+          # after 0.5.0, so it replaces the CPU build when installed over it).
+          version = json.load(open("frontend/src-tauri/tauri.conf.json"))["version"] + "+cuda"
           libs = ["libcudart.so.12", "libcublas.so.12", "libcublasLt.so.12"]
           files = {f"/usr/lib/meetily/cuda/{n}": os.path.realpath(os.path.join(libdir, n)) for n in libs}
           for src in files.values():
               assert os.path.isfile(src), src
-          json.dump({"bundle": {"targets": ["deb"], "linux": {"deb": {"files": files}}}}, open(out, "w"), indent=2)
+          json.dump({"version": version, "bundle": {"targets": ["deb"], "linux": {"deb": {"files": files}}}}, open(out, "w"), indent=2)
           print(open(out).read())
           EOF
           {
@@ -184,9 +187,7 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           mkdir -p dist
-          for f in target/release/bundle/deb/*.deb; do
-            if [ "$VARIANT" = cuda ]; then cp "$f" "dist/$(basename "$f" .deb)_cuda.deb"; else cp "$f" dist/; fi
-          done
+          cp target/release/bundle/deb/*.deb dist/
           if [ "$VARIANT" = cpu ]; then cp target/release/bundle/appimage/*.AppImage dist/; fi
           (cd dist && sha256sum * > "SHA256SUMS-$VARIANT.txt")
           ls -la dist

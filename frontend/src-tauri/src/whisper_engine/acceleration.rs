@@ -79,6 +79,70 @@ pub fn whisper_context_acceleration_for(
     }
 }
 
+/// What the Whisper engine actually runs on, for display in the settings UI.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WhisperRuntimeAcceleration {
+    /// Compiled backend: "Cuda", "Metal", "Vulkan", "HipBlas" or "Cpu".
+    pub backend: String,
+    /// True when transcription is expected to run on a GPU.
+    pub uses_gpu: bool,
+    /// GPU name when the backend can report it (CUDA only).
+    pub device: Option<String>,
+    /// Short human-readable label, e.g. "NVIDIA GPU (CUDA): NVIDIA GeForce RTX 2080 Ti".
+    pub label: String,
+}
+
+#[cfg(feature = "cuda")]
+mod cuda_probe {
+    use std::os::raw::{c_char, c_int};
+
+    // Provided by the ggml CUDA backend that whisper-rs-sys links statically.
+    extern "C" {
+        fn ggml_backend_cuda_get_device_count() -> c_int;
+        fn ggml_backend_cuda_get_device_description(device: c_int, description: *mut c_char, size: usize);
+    }
+
+    /// Names of the CUDA devices ggml can use (empty when none is usable).
+    pub fn devices() -> Vec<String> {
+        let count = unsafe { ggml_backend_cuda_get_device_count() };
+        (0..count.max(0))
+            .map(|device| {
+                let mut buf = [0 as c_char; 256];
+                unsafe { ggml_backend_cuda_get_device_description(device, buf.as_mut_ptr(), buf.len()) };
+                unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }
+                    .to_string_lossy()
+                    .trim()
+                    .to_string()
+            })
+            .collect()
+    }
+}
+
+/// Describe the hardware Whisper uses. For CUDA builds this asks the CUDA
+/// runtime (once, then cached), so a missing or unusable GPU is reported as CPU.
+pub fn whisper_runtime_acceleration() -> WhisperRuntimeAcceleration {
+    static CACHE: std::sync::OnceLock<WhisperRuntimeAcceleration> = std::sync::OnceLock::new();
+    CACHE.get_or_init(probe_runtime_acceleration).clone()
+}
+
+fn probe_runtime_acceleration() -> WhisperRuntimeAcceleration {
+    let backend = WhisperCompiledBackend::current();
+    let (uses_gpu, device, label) = match backend {
+        #[cfg(feature = "cuda")]
+        WhisperCompiledBackend::Cuda => match cuda_probe::devices().into_iter().next() {
+            Some(name) => (true, Some(name.clone()), format!("NVIDIA GPU (CUDA): {}", name)),
+            None => (false, None, "CPU (CUDA build, but no usable NVIDIA GPU was found)".to_string()),
+        },
+        #[cfg(not(feature = "cuda"))]
+        WhisperCompiledBackend::Cuda => (true, None, "NVIDIA GPU (CUDA)".to_string()),
+        WhisperCompiledBackend::Metal => (true, None, "Apple GPU (Metal)".to_string()),
+        WhisperCompiledBackend::Vulkan => (true, None, "GPU (Vulkan)".to_string()),
+        WhisperCompiledBackend::HipBlas => (true, None, "AMD GPU (ROCm)".to_string()),
+        WhisperCompiledBackend::Cpu => (false, None, "CPU (this build has no GPU support)".to_string()),
+    };
+    WhisperRuntimeAcceleration { backend: backend.as_str().to_string(), uses_gpu, device, label }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +204,14 @@ mod tests {
             assert!(!params.use_gpu);
             assert!(!params.flash_attn);
         }
+    }
+
+    #[cfg(not(any(feature = "cuda", feature = "vulkan", feature = "hipblas", feature = "metal", target_os = "macos")))]
+    #[test]
+    fn runtime_acceleration_reports_cpu_for_cpu_builds() {
+        let info = whisper_runtime_acceleration();
+        assert_eq!(info.backend, "Cpu");
+        assert!(!info.uses_gpu);
+        assert!(info.label.starts_with("CPU"));
     }
 }
