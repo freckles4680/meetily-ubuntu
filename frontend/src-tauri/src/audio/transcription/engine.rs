@@ -155,6 +155,14 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
     }
 }
 
+/// Build the OpenAI-compatible provider from saved settings (used by batch jobs too)
+pub(crate) async fn init_openai_compatible_provider<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<super::openai_compatible_provider::OpenAICompatibleProvider, String> {
+    let config = load_openai_compatible_config(app).await?;
+    super::openai_compatible_provider::OpenAICompatibleProvider::new(config)
+}
+
 /// Load and validate the saved OpenAI-compatible transcription config
 async fn load_openai_compatible_config<R: Runtime>(
     app: &AppHandle<R>,

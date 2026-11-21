@@ -36,7 +36,7 @@ import { useImportAudio, ImportResult } from '@/hooks/useImportAudio';
 import { useRouter } from 'next/navigation';
 import { useSidebar } from '../Sidebar/SidebarProvider';
 import { LANGUAGES } from '@/constants/languages';
-import { useTranscriptionModels, ModelOption } from '@/hooks/useTranscriptionModels';
+import { useTranscriptionModels, ModelOption, formatModelOptionLabel } from '@/hooks/useTranscriptionModels';
 
 
 interface ImportAudioDialogProps {
@@ -395,7 +395,7 @@ export function ImportAudioDialog({
                                   key={`${model.provider}:${model.name}`}
                                   value={`${model.provider}:${model.name}`}
                                 >
-                                  {model.displayName} ({Math.round(model.size_mb)} MB)
+                                  {formatModelOptionLabel(model)}
                                 </SelectItem>
                               ))}
                             </SelectContent>
