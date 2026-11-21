@@ -42,7 +42,7 @@ const env = { ...process.env };
 
 if (platform === 'linux' && feature === 'cuda') {
   console.log('🐧 Linux/CUDA detected: Setting CMAKE flags for NVIDIA GPU');
-  env.CMAKE_CUDA_ARCHITECTURES = '75';
+  env.CMAKE_CUDA_ARCHITECTURES = process.env.CMAKE_CUDA_ARCHITECTURES || '75';
   env.CMAKE_CUDA_STANDARD = '17';
   env.CMAKE_POSITION_INDEPENDENT_CODE = 'ON';
 }
@@ -53,11 +53,21 @@ let tauriCmd = `tauri ${command}`;
 // tauri.conf.json sets createUpdaterArtifacts, which makes `tauri build` fail after
 // bundling when no updater signing key is available (local builds, forks).
 // Without a key, skip the updater artifacts so the build finishes cleanly.
+// MEETILY_TAURI_CONFIG may point to an extra JSON config to merge in (the CUDA
+// package build uses it to bundle the CUDA runtime libraries into the .deb).
+let override = {};
+if (process.env.MEETILY_TAURI_CONFIG) {
+  override = JSON.parse(fs.readFileSync(process.env.MEETILY_TAURI_CONFIG, 'utf8'));
+  console.log(`🔧 Merging extra Tauri config from ${process.env.MEETILY_TAURI_CONFIG}`);
+}
 if (command === 'build' && !process.env.TAURI_SIGNING_PRIVATE_KEY) {
-  const overridePath = path.join(os.tmpdir(), 'meetily-no-updater-artifacts.json');
-  fs.writeFileSync(overridePath, JSON.stringify({ bundle: { createUpdaterArtifacts: false } }));
-  tauriCmd += ` --config "${overridePath}"`;
+  override.bundle = { ...(override.bundle || {}), createUpdaterArtifacts: false };
   console.log('ℹ️  TAURI_SIGNING_PRIVATE_KEY not set: building without signed updater artifacts');
+}
+if (Object.keys(override).length > 0) {
+  const overridePath = path.join(os.tmpdir(), 'meetily-tauri-override.json');
+  fs.writeFileSync(overridePath, JSON.stringify(override));
+  tauriCmd += ` --config "${overridePath}"`;
 }
 if (feature && feature !== 'none') {
   tauriCmd += ` -- --features ${feature}`;

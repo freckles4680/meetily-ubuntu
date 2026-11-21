@@ -14,9 +14,10 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}🚀 Meetily GPU-Accelerated Build Script${NC}"
 echo ""
 
-# Export CUDA flags for Linux/NVIDIA
+# Export CUDA flags for Linux/NVIDIA. CMAKE_CUDA_ARCHITECTURES can be set by the
+# caller (the Ubuntu Package workflow builds for several GPU generations).
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    export CMAKE_CUDA_ARCHITECTURES=75
+    export CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES:-75}"
     export CMAKE_CUDA_STANDARD=17
     export CMAKE_POSITION_INDEPENDENT_CODE=ON
 fi

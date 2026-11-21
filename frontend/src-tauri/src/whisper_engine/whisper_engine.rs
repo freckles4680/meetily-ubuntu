@@ -346,6 +346,10 @@ impl WhisperEngine {
 
                 // Enhanced acceleration status reporting
                 let acceleration_status = acceleration.status_label();
+                log::info!(
+                    "Whisper runtime device: {}",
+                    super::acceleration::whisper_runtime_acceleration().label
+                );
 
                 log::info!("Successfully loaded model: {} with {} (Performance Tier: {:?}, Beam Size: {}, Threads: {:?})",
                           model_name, acceleration_status, hardware_profile.performance_tier,

@@ -766,6 +766,7 @@ pub fn run() {
             whisper_engine::commands::whisper_get_available_models,
             whisper_engine::commands::whisper_load_model,
             whisper_engine::commands::whisper_get_current_model,
+            whisper_engine::commands::whisper_get_acceleration,
             whisper_engine::commands::whisper_is_model_loaded,
             whisper_engine::commands::whisper_has_available_models,
             whisper_engine::commands::whisper_validate_model_ready,

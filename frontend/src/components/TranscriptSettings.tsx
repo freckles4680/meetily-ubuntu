@@ -8,6 +8,7 @@ import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 import { TranscriptApiSettings } from './TranscriptApiSettings';
+import { TranscriptionHardwareLabel } from './TranscriptionHardwareLabel';
 
 
 export interface TranscriptModelProps {
@@ -157,6 +158,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                             )}
 
                         </div>
+                        <TranscriptionHardwareLabel provider={uiProvider} className="mt-2 mx-1" />
                     </div>
 
                     {uiProvider === 'localWhisper' && (
