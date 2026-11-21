@@ -1,5 +1,9 @@
 import { useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  isTranscriptApiConfigReady,
+  type TranscriptApiConfig,
+} from '@/lib/transcription-model-readiness';
 
 export interface RawModelInfo {
   name: string;
@@ -8,10 +12,16 @@ export interface RawModelInfo {
 }
 
 export interface ModelOption {
-  provider: 'whisper' | 'parakeet';
+  provider: 'whisper' | 'parakeet' | 'custom-openai';
   name: string;
   displayName: string;
+  /** Size on disk; 0 for API models, which have nothing local. */
   size_mb: number;
+}
+
+/** Label for a model in a dropdown: shows the size only for local models. */
+export function formatModelOptionLabel(model: ModelOption): string {
+  return model.size_mb > 0 ? `${model.displayName} (${Math.round(model.size_mb)} MB)` : model.displayName;
 }
 
 interface TranscriptModelConfig {
@@ -77,6 +87,24 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
       console.error('Failed to fetch Parakeet models:', err);
     }
 
+    // OpenAI-compatible API (only when its settings have been saved)
+    try {
+      const apiConfig = await invoke<TranscriptApiConfig | null>('api_get_transcript_custom_openai_config');
+      if (apiConfig && isTranscriptApiConfigReady(apiConfig)) {
+        const name = apiConfig.model!.trim();
+        let host = apiConfig.endpoint!;
+        try { host = new URL(apiConfig.endpoint!).host; } catch { /* keep raw endpoint */ }
+        allModels.push({
+          provider: 'custom-openai',
+          name,
+          displayName: `🌐 API: ${name} @ ${host}`,
+          size_mb: 0,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch transcription API settings:', err);
+    }
+
     setAvailableModels(allModels);
 
     // Set default model based on user's saved configuration
@@ -88,7 +116,8 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
     const configuredMatch = allModels.find(
       (m) =>
         (configuredProvider === 'localWhisper' && m.provider === 'whisper' && m.name === configuredModel) ||
-        (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel)
+        (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel) ||
+        (configuredProvider === 'custom-openai' && m.provider === 'custom-openai')
     );
 
     // Only set default model if user hasn't manually selected one

@@ -21,7 +21,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
 import { LANGUAGES } from '@/constants/languages';
-import { useTranscriptionModels, ModelOption } from '@/hooks/useTranscriptionModels';
+import { useTranscriptionModels, ModelOption, formatModelOptionLabel } from '@/hooks/useTranscriptionModels';
 import Analytics from '@/lib/analytics';
 import { TranscriptionHardwareLabel } from '@/components/TranscriptionHardwareLabel';
 
@@ -350,7 +350,7 @@ export function RetranscribeDialog({
                 <SelectContent>
                   {availableModels.map((model) => (
                     <SelectItem key={`${model.provider}:${model.name}`} value={`${model.provider}:${model.name}`}>
-                      {model.displayName} ({Math.round(model.size_mb)} MB)
+                      {formatModelOptionLabel(model)}
                     </SelectItem>
                   ))}
                 </SelectContent>

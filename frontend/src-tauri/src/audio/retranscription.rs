@@ -1,5 +1,6 @@
 // Retranscription module - allows re-processing stored audio with different settings
 
+use crate::audio::transcription::{TranscriptionProvider, OPENAI_COMPATIBLE_PROVIDER_ID};
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
 use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
@@ -103,10 +104,14 @@ pub async fn start_retranscription<R: Runtime>(
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
     let use_parakeet = provider.as_deref() == Some("parakeet");
+    let use_api = provider.as_deref() == Some(OPENAI_COMPATIBLE_PROVIDER_ID);
     let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider).await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
-    super::common::unload_engine_after_batch(use_parakeet).await;
+    // (an API provider has no local model to unload)
+    if !use_api {
+        super::common::unload_engine_after_batch(use_parakeet).await;
+    }
 
     // Guard will automatically clear flag on drop
     // No need for manual: RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -183,6 +188,7 @@ async fn run_retranscription<R: Runtime>(
 
     // Determine which provider to use (default to whisper)
     let use_parakeet = provider.as_deref() == Some("parakeet");
+    let use_api = provider.as_deref() == Some(OPENAI_COMPATIBLE_PROVIDER_ID);
 
     info!(
         "Starting retranscription for meeting {} with language {:?}, model {:?}, provider {:?}",
@@ -300,13 +306,23 @@ async fn run_retranscription<R: Runtime>(
     emit_progress(&app, &meeting_id, "transcribing", 25, "Loading transcription engine...");
 
     // Initialize the appropriate engine once (not per-segment)
-    let whisper_engine = if !use_parakeet {
+    let whisper_engine = if !use_parakeet && !use_api {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
         None
     };
     let parakeet_engine = if use_parakeet {
         Some(get_or_init_parakeet(&app, model.as_deref()).await?)
+    } else {
+        None
+    };
+
+    let api_provider = if use_api {
+        Some(
+            crate::audio::transcription::engine::init_openai_compatible_provider(&app)
+                .await
+                .map_err(|e| anyhow!(e))?,
+        )
     } else {
         None
     };
@@ -369,7 +385,14 @@ async fn run_retranscription<R: Runtime>(
         }
 
         // Transcribe this segment
-        let (text, conf) = if use_parakeet {
+        let (text, conf) = if use_api {
+            let provider = api_provider.as_ref().unwrap();
+            let result = provider
+                .transcribe(segment.samples.clone(), language.clone())
+                .await
+                .map_err(|e| anyhow!("API transcription failed on segment {}: {}", i, e))?;
+            (result.text, result.confidence.unwrap_or(0.9))
+        } else if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
             let text = engine
                 .transcribe_audio(segment.samples.clone())

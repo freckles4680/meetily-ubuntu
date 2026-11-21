@@ -1,4 +1,5 @@
 use crate::database::models::{Setting, TranscriptSetting};
+use crate::audio::transcription::TranscriptCustomOpenAIConfig;
 use crate::summary::CustomOpenAIConfig;
 use sqlx::SqlitePool;
 
@@ -24,7 +25,7 @@ pub struct SaveTranscriptConfigRequest {
 
 pub struct SettingsRepository;
 
-// Transcript providers: localWhisper, deepgram, elevenLabs, groq, openai
+// Transcript providers: localWhisper, parakeet, custom-openai (OpenAI-compatible API), plus legacy deepgram, elevenLabs, groq, openai
 // Summary providers: openai, claude, ollama, groq, added openrouter
 // NOTE: Handle data exclusion in the higher layer as this is database abstraction layer(using SELECT *)
 
@@ -180,6 +181,8 @@ impl SettingsRepository {
         let api_key_column = match provider {
             "localWhisper" => "whisperApiKey",
             "parakeet" => return Ok(()), // Parakeet doesn't need an API key, return early
+            // Stored inside customOpenAIConfig via save_transcript_custom_openai_config()
+            "custom-openai" => return Ok(()),
             "deepgram" => "deepgramApiKey",
             "elevenLabs" => "elevenLabsApiKey",
             "groq" => "groqApiKey",
@@ -209,6 +212,11 @@ impl SettingsRepository {
         pool: &SqlitePool,
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
+        if provider == "custom-openai" {
+            let config = Self::get_transcript_custom_openai_config(pool).await?;
+            return Ok(config.and_then(|c| c.api_key));
+        }
+
         let api_key_column = match provider {
             "localWhisper" => "whisperApiKey",
             "parakeet" => return Ok(None), // Parakeet doesn't need an API key
@@ -335,6 +343,55 @@ impl SettingsRepository {
             INSERT INTO settings (id, provider, model, whisperModel, customOpenAIConfig)
             VALUES ('1', 'custom-openai', $1, 'large-v3', $2)
             ON CONFLICT(id) DO UPDATE SET
+                customOpenAIConfig = excluded.customOpenAIConfig
+            "#,
+        )
+        .bind(&config.model)
+        .bind(config_json)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    // ===== TRANSCRIPTION: OPENAI-COMPATIBLE CONFIG =====
+
+    /// Gets the OpenAI-compatible transcription config (transcript_settings.customOpenAIConfig)
+    pub async fn get_transcript_custom_openai_config(
+        pool: &SqlitePool,
+    ) -> std::result::Result<Option<TranscriptCustomOpenAIConfig>, sqlx::Error> {
+        let json: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT customOpenAIConfig FROM transcript_settings WHERE id = '1' LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        match json.flatten() {
+            Some(json) => serde_json::from_str(&json).map(Some).map_err(|e| {
+                sqlx::Error::Protocol(
+                    format!("Invalid JSON in transcript customOpenAIConfig: {}", e).into(),
+                )
+            }),
+            None => Ok(None),
+        }
+    }
+
+    /// Saves the OpenAI-compatible transcription config and selects it as the active provider
+    pub async fn save_transcript_custom_openai_config(
+        pool: &SqlitePool,
+        config: &TranscriptCustomOpenAIConfig,
+    ) -> std::result::Result<(), sqlx::Error> {
+        let config_json = serde_json::to_string(config).map_err(|e| {
+            sqlx::Error::Protocol(format!("Failed to serialize config to JSON: {}", e).into())
+        })?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO transcript_settings (id, provider, model, customOpenAIConfig)
+            VALUES ('1', 'custom-openai', $1, $2)
+            ON CONFLICT(id) DO UPDATE SET
+                provider = excluded.provider,
+                model = excluded.model,
                 customOpenAIConfig = excluded.customOpenAIConfig
             "#,
         )
