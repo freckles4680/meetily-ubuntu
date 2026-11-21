@@ -11,6 +11,19 @@ The **Ubuntu Package** GitHub Actions workflow (`.github/workflows/ubuntu-packag
 - **.deb:** `sudo apt install ./meetily_<version>_amd64.deb`
 - **AppImage:** uses the static type-2 runtime with a zstd-compressed image, so it needs `fusermount3` (package `fuse3`, installed by default on Ubuntu desktops) but not `libfuse2`. If it fails with "Cannot mount AppImage, please check your FUSE setup", install `fuse3` or run it with `--appimage-extract-and-run`. AppImageLauncher (the "Integrate" prompt) cannot read zstd images and fails with "This doesn't look like a squashfs image"; remove it or use the .deb.
 
+
+### NVIDIA GPU build (CUDA)
+
+The same workflow also builds `meetily_<version>+cuda_amd64.deb` (artifact `meetily-ubuntu-cuda`). It runs Whisper transcription and local summaries (llama-helper) on an NVIDIA GPU, which is several times faster than CPU, especially for the larger Whisper models.
+
+- **GPUs:** compiled for GeForce 16/20 series (Turing) through 50 series (Blackwell), plus the matching workstation and datacenter cards (compute capability 7.5, 8.0, 8.6, 8.9 and 12.0). Pick other architectures with the `cuda_architectures` input when running the workflow by hand.
+- **What the machine needs:** only the NVIDIA proprietary driver, version 570 or newer. The CUDA runtime libraries (cudart, cuBLAS) are bundled in `/usr/lib/meetily/cuda`, so you do not install the CUDA toolkit. On Ubuntu: `sudo ubuntu-drivers install` (or `sudo apt install nvidia-driver-570`), reboot, and check with `nvidia-smi`.
+- **Install:** `sudo apt install ./meetily_<version>+cuda_amd64.deb`. It uses the same package name as the CPU build, so it replaces it. To go back to the CPU build, run `sudo apt install --allow-downgrades ./meetily_<version>_amd64.deb`. `dpkg -l meetily` shows `<version>+cuda` for the GPU build, and only the GPU build has `/usr/lib/meetily/cuda`. Quit Meetily before installing (or restart it afterwards): a copy that is still running keeps using the old build.
+- **In the app:** Settings → Transcription shows "Runs on: NVIDIA GPU (CUDA): <your GPU>" under the engine picker when Local Whisper is selected. Parakeet always runs on the CPU, so pick Local Whisper (and a Whisper model in the re-transcribe dialog) to use the GPU.
+- **Check:** `python3 scripts/check_nvidia_gpu.py` reports the driver, the GPU's compute capability and whether the installed app finds all its libraries.
+- **Without the NVIDIA driver** the CUDA build does not start (it needs `libcuda.so.1`); use the CPU package on such machines.
+- **Parakeet stays on the CPU.** Its int8-quantized ONNX models are built for CPU inference, and ONNX Runtime's CUDA provider would also need cuDNN (about 1 GB). To use the GPU, pick a Whisper model (for example large-v3-turbo) in the transcription settings.
+- **Size:** the .deb is much larger than the CPU one because cuBLAS is large.
 ---
 
 ## 🚀 Quick Start (Recommended for Beginners)

@@ -23,6 +23,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { LANGUAGES } from '@/constants/languages';
 import { useTranscriptionModels, ModelOption } from '@/hooks/useTranscriptionModels';
 import Analytics from '@/lib/analytics';
+import { TranscriptionHardwareLabel } from '@/components/TranscriptionHardwareLabel';
 
 interface RetranscribeDialogProps {
   open: boolean;
@@ -357,6 +358,7 @@ export function RetranscribeDialog({
               <p className="text-xs text-muted-foreground">
                 Choose a transcription model
               </p>
+              <TranscriptionHardwareLabel provider={selectedModelDetails?.provider} />
             </div>
           )}
 
