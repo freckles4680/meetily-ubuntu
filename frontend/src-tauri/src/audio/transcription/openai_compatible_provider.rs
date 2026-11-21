@@ -97,6 +97,20 @@ pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
+/// Remove the markup some ASR models leave in their text output.
+/// Qwen3-ASR served by llama.cpp returns e.g. "language English<asr_text>Hello there"
+/// (and "language None<asr_text>" for silence); a closing "</asr_text>" may also appear.
+pub fn strip_asr_markup(text: &str) -> String {
+    static PREFIX: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)(?:language\s+[^<\n]{0,40})?<asr_text>|</asr_text>")
+            .expect("valid regex")
+    });
+    if !text.contains("asr_text>") {
+        return text.to_string();
+    }
+    PREFIX.replace_all(text, " ").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[derive(Deserialize)]
 struct TranscriptionResponse {
     text: String,
@@ -166,7 +180,7 @@ pub async fn request_transcription(
                 .to_string(),
         )
     })?;
-    Ok(parsed.text)
+    Ok(strip_asr_markup(&parsed.text))
 }
 
 pub fn build_http_client() -> Result<reqwest::Client, String> {
@@ -252,6 +266,25 @@ mod tests {
         assert_eq!(&wav[36..40], b"data");
         assert_eq!(i16::from_le_bytes(wav[46..48].try_into().unwrap()), i16::MAX);
         assert_eq!(i16::from_le_bytes(wav[48..50].try_into().unwrap()), -i16::MAX);
+    }
+
+    #[test]
+    fn strips_qwen3_asr_markup() {
+        assert_eq!(
+            strip_asr_markup("language English<asr_text>And God, we pray."),
+            "And God, we pray."
+        );
+        assert_eq!(strip_asr_markup("language None<asr_text>"), "");
+        assert_eq!(strip_asr_markup("<asr_text>Hi</asr_text>"), "Hi");
+        assert_eq!(
+            strip_asr_markup("language English<asr_text>One. language English<asr_text>Two."),
+            "One. Two."
+        );
+        // Ordinary text, including the word "language", is untouched
+        assert_eq!(
+            strip_asr_markup("The language  of  the meeting."),
+            "The language  of  the meeting."
+        );
     }
 
     #[test]
